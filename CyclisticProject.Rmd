@@ -1,0 +1,405 @@
+---
+title: "Cyclistic Project"
+author: "Hasan Sezer"
+date: "2024-08-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# The aim of the project
+Cyclistic is a fictionary bike-share company. Stakeholders aim to maximize the number of annual membership. Thus, my objective is to identfy differences between annual members and casual riders, which can turn into a data-driven marketing strategy to convert casual riders to annual members. At the end of the analysis/report, I will offer tentative campaign ideas to convert subscribers into customers.
+
+**Data:** Trips_2019_Q1.csv
+
+**Data Source:** https://divvy-tripdata.s3.amazonaws.com/index.html
+
+**Project Questions:** 
+
+1. How do causal riders and annual members/customers use Cyclistic differently?
+2. How can subscribers/casual riders become customers?
+
+
+## Road Map
+I will focus on **user type** and its relation with different variables such as **trip duration**, **trip days**, **gender of the user**, and **age of the user** and their interaction with each other. I will do data cleaning and formatting, then conduct EDA. Finally, I will build a logistic regression model to find which variables are significant on the **user type.**  
+
+Load data
+```{r}
+trips_2019<-read.csv("Trips_2019_Q1.csv")
+```
+
+Load necessary packages
+```{r}
+library(dplyr)
+library(tidyverse)
+```
+## A. Data inspection and preprocessing
+
+Inspect the data set quickly; look at variables and their types. Do wrangling if needed. 
+
+```{r}
+str(trips_2019)
+```
+- There are 14 variables and 365069 rows/observations. 
+- Variable names make sense and error-free. 
+- **trip_duration**, **start_time**, and **end_time** are in character/string format. Change the data type.
+
+- In **tripduration**, the commas in certain rows such as "1,783.0" cannot be handled by as.numeric function, hence NAs emerged. I need to handle comma, then convert it to a numeric data. Then, find the trip duration in minutes. 
+
+```{r}
+trips_2019$tripduration <- gsub(",", "", trips_2019$tripduration)
+```
+
+```{r}
+trips_2019$tripduration<-as.numeric(gsub(","," ", trips_2019$tripduration))
+```
+
+```{r}
+trips_2019$tripduration<-trips_2019$tripduration/60
+```
+
+Finally, start and end_time need a format change.
+
+```{r}
+trips_2019$start_time <- as.POSIXct(trips_2019$start_time, format = "%Y-%m-%d %H:%M:%S")
+trips_2019$end_time <- as.POSIXct(trips_2019$end_time, format = "%Y-%m-%d %H:%M:%S")
+```
+
+
+- Missing values: Only gender has NAs, which is 18023. This is around %20 of the sample size. 
+
+```{r}
+missing_summary <- trips_2019%>%
+  summarise(across(everything(), ~ sum(is.na(.))))%>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "MissingValues")
+
+print(missing_summary)
+```
+
+## B. Exploratory Data Analysis (EDA)
+
+#### 1. Trip Duration by User Type
+
+```{r}
+duration_by_usertype <- trips_2019 %>%
+  group_by(usertype) %>%
+  summarize(avg_duration = mean(tripduration, na.rm = TRUE))
+```
+
+
+```{r}
+ggplot(data=duration_by_usertype)+
+  geom_bar(stat="identity", mapping = aes(x=usertype, y=avg_duration, fill=usertype))+
+  labs(x = "User Type", y = "Average Trip Duration (minutes)", title = "Average Trip Duration by User Type") +
+  theme_minimal()
+
+```
+
+**Interpretation:** 
+
+Customers' trip duration time is significantly higher than subscribers, or causal riders. If revenue is correlated with trip duration, then it is very reasonable to increase the customer size.  
+
+
+#### 1.1 Trip Duration by User Type and Gender
+Gender has a lot of missing values, or empty cells to be more precisely. Handle it first. 
+
+```{r}
+table(trips_2019$gender)
+```
+
+```{r}
+trips_2019 <- trips_2019 %>%
+  mutate(gender = na_if(gender, "")) # converting empty cells to NAs
+```
+
+```{r}
+trips_2019 <- trips_2019 %>%
+  filter(!is.na(gender)) # then filter our NAs introduced above
+```
+
+```{r}
+table(trips_2019$gender) # All good!
+```
+
+```{r}
+duration_by_usertype_gender <- trips_2019 %>%
+  group_by(usertype, gender) %>%
+  summarize(avg_duration = mean(tripduration, na.rm = TRUE), .groups = 'drop')
+```
+
+```{r}
+duration_by_usertype_gender
+```
+
+```{r}
+ggplot(duration_by_usertype_gender, aes(x = usertype, y = avg_duration, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Trip Duration by User Type and Gender",
+       x = "User Type",
+       y = "Average Trip Duration (minutes)") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Male" = "blue", "Female" = "pink")) 
+```
+
+**Interpretation:** 
+
+User types' trip duration is very close for males and females. In both user categories, female and male have almost identical trip duration, where females ride bikes slightly **longer** than males. 
+
+
+#### 2. Gender vs User Type 
+
+```{r}
+usertype_gender_count <- trips_2019 %>%
+  count(usertype, gender)
+
+print(usertype_gender_count)
+```
+
+
+```{r}
+ggplot(usertype_gender_count, aes(x = usertype, y = n, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_y_continuous(labels = scales::label_number()) +  
+  labs(title = "Distribution of User Type by Gender",
+       x = "User Type",
+       y = "Count") +
+  theme_minimal()
+```
+
+**Interpretation:**
+Frequency of bike use is higher in males than females in both user types. Due to the great difference between customers and subscribers in bike use frequency, the plot is not very intuitive in identifying gender variation in customer group. Thus, I will calculate proportion of bike use frequency of gender in each user type.
+
+*Proportion of gender in each user type*
+
+```{r}
+usertype_gender_prop <- trips_2019 %>%
+  count(usertype, gender) %>%
+  group_by(usertype) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+print(usertype_gender_prop)
+```
+
+
+
+```{r}
+ggplot(usertype_gender_prop, aes(x = usertype, y = prop, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_y_continuous(labels = scales::percent) +  # Format y-axis labels as percentages
+  labs(title = "Proportion of User Type by Gender",
+       x = "User Type",
+       y = "Proportion") +
+  theme_minimal()
+```
+
+**Interpretation:** 
+
+Both count and proportion data show that male subscribers have considerably higher bike use **frequency** than female subscribers. Proportion graph shows that among customers, females use at around %32, while males use bikes at around %68. Among subscribers, females' frequenct of bike use is %19 while males' is %82. 
+
+Note that unlike **tripduration by gender** in **Section 1.1** where trip duration does not vary too much between males and females in user categories, the frequency of bike use by user type differ drastically between males and females. Thus, trip duration does not seem to be a key metric, unlike frequency.
+
+
+#### 3. Weekdays
+
+First, I need to find the day of bike use.
+```{r}
+trips_2019$weekday <- weekdays(trips_2019$start_time)
+```
+
+```{r}
+table(trips_2019$weekday)
+```
+
+Calculate weekday counts and reorder weekdays by frequency
+
+```{r}
+trips_weekday_summary <- trips_2019 %>%
+  count(weekday) %>%
+  arrange(n) %>%  
+  mutate(weekday = factor(weekday, levels = weekday)) 
+
+```
+
+```{r}
+ggplot(data = trips_weekday_summary, aes(x = weekday, y = n, fill = weekday)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Day of the Week", y = "Count", title = "Trips by Day of the Week (Ordered by Frequency)") +
+  theme_minimal()
+```
+**Interpretation:**
+
+Overall, weekday bike use is significantly greater than weekend use. 
+
+#### 3.1  Weekday by Usertype
+
+Frequency of weekday 
+```{r}
+weekdays_by_users<-trips_2019%>%
+  count(usertype, weekday)
+weekdays_by_users
+```
+
+
+```{r}
+ggplot(data=weekdays_by_users)+
+  geom_bar(stat="identity", position="dodge", mapping = aes(x=usertype, y=n, fill=weekday))+
+   labs(x = "Day of the Week", y = "Count", title = "Trip Frequency by the Weekday and User Type") +
+  theme_minimal()
+  
+```
+
+**Interpretation:**
+
+Customers and casual bikers have a unique pattern regarding the day of the week that they use bikes. While members use bikes on weekends more, casual riders prefer them on weekdays more.   
+
+
+#### 3.2 Trip duration by usertype and weekday
+
+```{r}
+trip_duration_by_usertype_weekday <- trips_2019 %>%
+  group_by(usertype, weekday) %>%
+  summarize(avg_duration = mean(tripduration, na.rm = TRUE), .groups = 'drop')
+trip_duration_by_usertype_weekday
+```
+
+```{r}
+ggplot(trip_duration_by_usertype_weekday, aes(x = weekday, y = avg_duration, fill = usertype)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Trip Duration by User Type and Weekday",
+       x = "Weekday",
+       y = "Average Duration (minutes)") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Subscriber" = "blue", "Customer" = "red"))
+```
+
+**Interpretation:**
+
+This graph shows that trip duration on weekends in each group is in peak: Both members and casual riders tend to have longer bike usage time in weekends than weekdays.    
+
+On the other hand, this conclusion contrasts with the finding in previous section **3.1  Weekday by Usertype** where casual riders, or subscribers tend not use bikes during the weekends. Their bike use frequency in weekends is less as compared to weekdays. 
+
+The contrast might be due to the fact that casual riders prefer bikes in short commutes like work, school during the week, while they use bikes for leisure time activity in weekends, hence their trip duration increases accordingly during the weekend. 
+
+
+#### 4. Age 
+
+```{r}
+summary(trips_2019$birthyear)
+```
+
+There are some extreme values like 1900 as birth year, so I will filter out them first. I will include birthyear equal or greater than 1940. 
+
+```{r}
+trips_2019<-trips_2019%>%
+  filter(birthyear>=1940)
+```
+
+Calculate the age using birth year.
+
+```{r}
+trips_2019<-trips_2019%>%
+  mutate(age=2019-birthyear)
+```
+
+```{r}
+summary(trips_2019$age)
+```
+
+#### 4.1 User type by Age
+
+
+```{r}
+summary_age_usertype <- trips_2019 %>%
+  group_by(usertype) %>%
+  summarize(mean_age = mean(age, na.rm = TRUE),
+            sd_age = sd(age, na.rm = TRUE))
+
+summary_age_usertype
+```
+
+
+```{r}
+ggplot(summary_age_usertype, aes(x = usertype, y = mean_age, fill = usertype)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = mean_age - sd_age, ymax = mean_age + sd_age), width = 0.2) +
+  labs(title = "Average Age by User Type with Standard Deviation",
+       x = "User Type",
+       y = "Average Age") +
+  theme_minimal()
+```
+**Interpretation:**
+
+Customers (mean age=29.55) are relatively younger than casual riders (mean age=37.40). Note that standard deviation is higher in Subscribers meaning there is wider dispersion/variation of data in this group.   
+
+
+## 4. Statistical Analysis
+
+I want to find which predictors are significant in predicting if a user will be a **customer** or **subscriber**. For this, I need to build a **logistic regression** model because the outcome variable is a binomial type. 
+
+There are mainly two ways to build a (logistic) regression. First, we can start with an intercept model only, then incrementally add one predictor into the model, and evaluate the model performance to see each added variable have predictive value for the outcome. This process continues untill all predictors are fed into the model.  
+
+Another is the opposite, where we feed all predictors into the model initially and remove each independent variable at a time, and compare the model performance in each step. I will adopt the latter, which is the step-wise backward selection. 
+
+To be able to do this, dummy coding is required for **usertype**. I need to convert levels/factors of **usertype** into 0 and 1, because the outcome variable in a logistic regression should be a binomial data. **Customer** level in **usertype** will be the reference category with 0 because it is less frequent and less interesting. In other words, the **Subscriber** level in **usertype** will be 1, being compared to the reference category during cooefficient interpretation. 
+
+Before that, I need to convert **usertype** into a factor, which then can be converted into 1 and 0.
+
+```{r}
+trips_2019$usertype <- as.factor(trips_2019$usertype)
+glimpse(trips_2019)
+
+trips_2019$usertype_new <- ifelse(trips_2019$usertype == "Subscriber", 1, 0)
+
+table(trips_2019$usertype_new)
+```
+```{r}
+table(trips_2019$usertype) # checking if dummy coding is accurate!
+```
+
+
+```{r}
+backward_model<-glm(usertype_new~tripduration+weekday+gender+age, data=trips_2019, family = binomial())
+
+```
+
+
+```{r}
+stepwise_backward_model<-step(backward_model,direction = "backward")
+```
+**Interpreation:**
+
+"none" is the baseline model with all predictors being fed into the model. I will compare the Deviance and AIC of "none" with the removal of each predictor. **The least the Deviance and AIC is, the better the model is.** Thus, if removing any predictor leads to an increase in Deviance and AIC, the model gets worse, which indicates that it is a significant predictor on **user type**. 
+
+The model output shows that all variables are important in predicting **usertype** because removal of each yields an increase in Deviance and AIC. The **age** being the most significant predictor while **trip duration** being the least significant variable. 
+
+
+```{r}
+summary(stepwise_backward_model)
+```
+
+**Interpretation**
+
+Intercept is the odds of being a subscriber, or casual rider when all predictors are in zero value. Positive cooefficients indicate the increase in being a subscriber, while negative cooefficient signals decrease in being a subscriber. 
+
+All predictors except Tuesday is significant. Positive predictors, meaning increase in likelihood/log-odds of being a subscriber in each unit increase, are weekdayMonday, weekdayThursday, weekdayWednesday, genderMale, and age. 
+
+Negative predictors, meaning decrease in likelihood/log-odds of being a subscriber in each unit decrease, are tripduration, weekdaySaturday, and weekdaySunday. 
+
+**Possible Campaigns**
+
+A. Monday, Thursday, Wednesday, male, and age are positively associated with being a "Subscriber."
+
+i. Subscribers use bikes on weekdays. Offeringw weekday biking perks for customers may can turn subscribers into customers.
+
+ii. Subscribers are mostly males. Thus, creating offers specifically for male users can be considered. Offering exclusive bike features for male customers might be plausible.  
+
+iii. As the age increases, they tend to be subscribers. Thus, there might be a senior's discount for people who are over certain age, say 40 years old, when they become customers.   
+
+B. Tripduration, Saturday, and Sunday are negatively associated with being a "Subscriber." 
+
+i. Subscribers have lesser trip duration. Thus, offering frequent bike benefits rather than trip duration for customers may convince subscribers to become customers. Or, encouraging longer trip duration by deals and rewards when subscribers become customers can be considered. 
+
+ii. Subscribers prefer bikes on weekends less. Thus, one campaign might be to offer free/discounted rates on weekday use for customers if they prefer bikes on the weekends. This may help with the engagement of them all week and becoming a customer. The campaign might goes as: "Ride three weekdays, get one weekend deal, and ride five weekdays and get two weekend deal." 
+
+
